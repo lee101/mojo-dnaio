@@ -3,11 +3,10 @@ from __future__ import annotations
 import os
 
 from ._core import SequenceRecord
-from ._lib import format_fastq
 
 
 class FastqWriter:
-    """Write FASTQ records; Mojo performs the byte-level record formatting."""
+    """Write validated FASTQ records with one final bytes allocation per record."""
     def __init__(self, file, *, two_headers=False, opener=open, _close_file=None):
         self._two_headers = two_headers
         self._close_on_exit = False
@@ -23,7 +22,7 @@ class FastqWriter:
             raise TypeError("record must be a SequenceRecord")
         if record.qualities is None:
             raise ValueError("Cannot write FASTQ record without qualities")
-        self._file.write(format_fastq(record.name, record.sequence, record.qualities, self._two_headers))
+        self._file.write(record.fastq_bytes(self._two_headers))
 
     def writeseq(self, name: str, sequence: str, qualities: str) -> None:
         self.write(SequenceRecord(name, sequence, qualities))

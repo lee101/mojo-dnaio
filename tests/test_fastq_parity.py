@@ -53,10 +53,16 @@ def test_reader_rejects_invalid_fastq_at_matching_line(payload, line):
     assert error.value.line == line
 
 
-def test_reader_rejects_non_ascii_fastq():
+@pytest.mark.parametrize("payload, line", [
+    (b"@r\xff\nA\n+\n!\n", 0),
+    (b"@r\nA\xff\n+\n!!\n", 1),
+    (b"@r\nA\n+\xff\n!\n", 2),
+    (b"@r\nA\n+\n\xff\n", 3),
+])
+def test_reader_rejects_non_ascii_fastq(payload, line):
     with pytest.raises(dnaio.FastqFormatError) as error:
-        dnaio.FastqReader(io.BytesIO(b"@r\nA\n+\n\xff\n"))
-    assert error.value.line == 3
+        dnaio.FastqReader(io.BytesIO(payload))
+    assert error.value.line == line
 
 
 @pytest.mark.parametrize("two_headers", [False, True])
@@ -108,6 +114,13 @@ def test_mojo_scanner_simd_tail():
     assert [(record.name, record.sequence, record.qualities) for record in reader] == [
         (name.decode(), sequence.decode(), "I" * 151)
     ]
+
+
+def test_reader_retries_offset_capacity_for_short_records():
+    payload = b"@r\nA\n+\n!\n" * 1000
+    reader = dnaio.FastqReader(io.BytesIO(payload))
+    assert reader.number_of_records == 1000
+    assert len(list(reader)) == 1000
 
 
 def test_reader_preserves_custom_sequence_class():

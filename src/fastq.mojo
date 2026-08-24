@@ -6,18 +6,26 @@ comptime BPtr = UnsafePointer[UInt8, AnyOrigin[mut=True]]
 comptime IPtr = UnsafePointer[Int, AnyOrigin[mut=True]]
 
 
-def line_end(data: BPtr, n: Int, start: Int) -> Int:
+def ascii_line_end(data: BPtr, n: Int, start: Int) -> Int:
+    """Return the LF offset, -1 at EOF, or -2 for non-ASCII input."""
     comptime W = simd_width_of[DType.uint8]()
     var i = start
     while i + W <= n:
-        if data.load[width=W](i).eq(SIMD[DType.uint8, W](UInt8(10))).reduce_or()[0]:
+        var values = data.load[width=W](i)
+        if values.eq(SIMD[DType.uint8, W](UInt8(10))).reduce_or()[0]:
             for j in range(W):
                 if data[i + j] == UInt8(10):
                     return i + j
+                if data[i + j] > UInt8(127):
+                    return -2
+        elif not values.le(SIMD[DType.uint8, W](UInt8(127))).reduce_and()[0]:
+            return -2
         i += W
     while i < n:
         if data[i] == UInt8(10):
             return i
+        if data[i] > UInt8(127):
+            return -2
         i += 1
     return -1
 
@@ -26,20 +34,6 @@ def trimmed_length(data: BPtr, start: Int, end: Int) -> Int:
     if end > start and data[end - 1] == UInt8(13):
         return end - start - 1
     return end - start
-
-
-def ascii_line(data: BPtr, start: Int, end: Int) -> Bool:
-    comptime W = simd_width_of[DType.uint8]()
-    var i = start
-    while i + W <= end:
-        if not data.load[width=W](i).le(SIMD[DType.uint8, W](UInt8(127))).reduce_and()[0]:
-            return False
-        i += W
-    while i < end:
-        if data[i] > UInt8(127):
-            return False
-        i += 1
-    return True
 
 
 def equal_bytes(data: BPtr, left: Int, right: Int, width: Int) -> Bool:
@@ -65,7 +59,9 @@ def scan_fastq(data: BPtr, n: Int, fields: IPtr, capacity: Int) -> Int:
     var pos = 0
     var records = 0
     while pos < n:
-        var name_line = line_end(data, n, pos)
+        var name_line = ascii_line_end(data, n, pos)
+        if name_line == -2:
+            return -(records * 4 + 1)
         if name_line < 0:
             name_line = n
         if pos >= n or data[pos] != UInt8(64):
@@ -73,15 +69,17 @@ def scan_fastq(data: BPtr, n: Int, fields: IPtr, capacity: Int) -> Int:
         var seq_start = name_line + 1
         if name_line == n:
             return -(records * 4 + 2)
-        var seq_line = line_end(data, n, seq_start)
+        var seq_line = ascii_line_end(data, n, seq_start)
         if seq_line < 0:
             return -(records * 4 + 2)
         var plus_start = seq_line + 1
-        var plus_line = line_end(data, n, plus_start)
+        var plus_line = ascii_line_end(data, n, plus_start)
         if plus_line < 0 or plus_start >= n or data[plus_start] != UInt8(43):
             return -(records * 4 + 3)
         var qual_start = plus_line + 1
-        var qual_line = line_end(data, n, qual_start)
+        var qual_line = ascii_line_end(data, n, qual_start)
+        if qual_line == -2:
+            return -(records * 4 + 4)
         if qual_line < 0:
             qual_line = n
         var name_start = pos + 1
@@ -90,14 +88,6 @@ def scan_fastq(data: BPtr, n: Int, fields: IPtr, capacity: Int) -> Int:
         var second_start = plus_start + 1
         var second_len = trimmed_length(data, second_start, plus_line)
         var qual_len = trimmed_length(data, qual_start, qual_line)
-        if not ascii_line(data, pos, name_line):
-            return -(records * 4 + 1)
-        if not ascii_line(data, seq_start, seq_line):
-            return -(records * 4 + 2)
-        if not ascii_line(data, plus_start, plus_line):
-            return -(records * 4 + 3)
-        if not ascii_line(data, qual_start, qual_line):
-            return -(records * 4 + 4)
         if second_len != 0 and (second_len != name_len or not equal_bytes(data, name_start, second_start, name_len)):
             return -(records * 4 + 3)
         if seq_len != qual_len:

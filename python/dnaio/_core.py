@@ -15,7 +15,7 @@ def _ascii(field: str, value: str) -> str:
     return value
 
 
-@dataclass(eq=True)
+@dataclass(eq=True, slots=True)
 class SequenceRecord:
     name: str
     sequence: str

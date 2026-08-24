@@ -37,9 +37,9 @@ class FastqReader:
         if not raw:
             return []
         data = bytes_array(raw)
-        # Every complete FASTQ record has four line endings. `bytes.count` is a
-        # fast C-level upper bound and avoids reserving six int64s per input byte.
-        capacity = raw.count(b"\n") // 4 + 1
+        # Most reads are longer than 256 bytes per record. Short-read inputs retry
+        # with the exact count returned by Mojo instead of pre-scanning all bytes.
+        capacity = max(1, len(raw) // 256 + 1)
         fields = np.empty(capacity * 6, dtype=np.int64)
         status = lib().md_scan_fastq(data.ctypes.data, len(raw), fields.ctypes.data, capacity)
         if status < 0:
@@ -47,6 +47,15 @@ class FastqReader:
             messages = {0: "Line expected to start with '@'", 1: "Premature end of file encountered.",
                         2: "Line expected to start with '+'", 3: "Length of sequence and qualities differ"}
             raise FastqFormatError(messages.get(line % 4, "Invalid FASTQ record"), line)
+        if status > capacity:
+            capacity = status
+            fields = np.empty(capacity * 6, dtype=np.int64)
+            status = lib().md_scan_fastq(data.ctypes.data, len(raw), fields.ctypes.data, capacity)
+            if status < 0:
+                line = -status - 1
+                messages = {0: "Line expected to start with '@'", 1: "Premature end of file encountered.",
+                            2: "Line expected to start with '+'", 3: "Length of sequence and qualities differ"}
+                raise FastqFormatError(messages.get(line % 4, "Invalid FASTQ record"), line)
         return fields[:status * 6].reshape(status, 6).tolist()
 
     def _has_two_headers(self) -> bool:
